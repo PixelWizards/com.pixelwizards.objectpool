@@ -1,2 +1,2 @@
 # com.pixelwizards.objectpool
-Object pool package
+Object pooling system for Unity.

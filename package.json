@@ -1,0 +1,13 @@
+{
+  "name": "com.pixelwizards.objectpool",
+  "displayName": "Pixel Wizards - Object Pool",
+  "version": "1.0.0",
+  "unity": "2018.4",
+  "category": null,
+  "author": {
+    "name": "Pixel Wizards",
+    "email": "support@pixelwizards.ca",
+    "url": "www.pixelwizards.ca"
+  },
+  "keywords": []
+}

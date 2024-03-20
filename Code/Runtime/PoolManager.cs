@@ -5,42 +5,14 @@ using UnityEngine;
 namespace PixelWizards.ObjectPool
 {
     /// <summary>
-    /// Which prefab we want to pool and how many copies
-    /// </summary>
-    [Serializable]
-    public class PoolObjectSetting
-    {
-        public GameObject prefab;
-        public int count;
-    }
-    
-    /// <summary>
-    /// Actual pool containing object instances of one prefab
-    /// </summary>
-    [Serializable]
-    public class PoolObjects
-    {
-        public List<GameObject> instances;
-        public int currentIndex;
-
-        public GameObject GetInstance()
-        {
-            var instance = instances[currentIndex];
-            instance.SetActive(true);
-
-            if (++currentIndex >= instances.Count)
-            {
-                currentIndex = 0;
-            }
-
-            return instance;
-        }
-    }
-
-    /// <summary>
     /// Simple Pooling system for GameObjects.
     /// It instantiates multiple instances of predefined prefabs 
     /// and keeps them in a scene.
+    ///
+    /// The Pool Manager does not need to be instantiated in the scene, all
+    /// methods are static and can be accessed without a reference, like so:
+    ///
+    /// PoolManager.GetInstance("prefabName");
     /// </summary>
     public class PoolManager : MonoBehaviour
     {
@@ -57,7 +29,7 @@ namespace PixelWizards.ObjectPool
         }
 
         /// <summary>
-        /// Creates a new PoolObject which will hold instances of the prefab
+        /// Creates a new PoolObject which will hold instances of the prefab.
         /// </summary>
         /// <param name="poolObject">Settings of the pooled prefab</param>
         private static void CreatePoolObjects(PoolObjectSetting poolObject)

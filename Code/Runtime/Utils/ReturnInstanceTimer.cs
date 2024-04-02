@@ -1,6 +1,6 @@
 ﻿using UnityEngine;
 
-namespace PixelWizards.ObjectPool
+namespace MegaCrush.ObjectPool
 {
     /// <summary>
     /// Automatically return an object to the Pool when the timer expires

@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace PixelWizards.ObjectPool
+namespace MegaCrush.ObjectPool
 {
     /// <summary>
     /// Simple Pooling system for GameObjects.

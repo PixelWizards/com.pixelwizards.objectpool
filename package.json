@@ -3,7 +3,7 @@
   "displayName": "Object Pooling",
   "version": "1.0.0",
   "unity": "2018.4",
-  "description": "Powerful Object Pooling system.",
+  "description": "Powerful Object Pooling system.\n\nDocumentation is online: \nhttps://www.megacrush.app/api/object-pool\n\nNo editor-facing functionality.",
   "category": null,
   "author": {
     "name": "Megacrush Interactive",

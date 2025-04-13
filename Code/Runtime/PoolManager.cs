@@ -37,7 +37,7 @@ namespace MegaCrush.ObjectPool
             var pool = new PoolObjects();
             if (expandExistingPool)
             {
-                Debug.Log("expanding pool: :" + poolObject.prefab);
+                Debug.Log("expanding pool...");
                 pool = objectsMap[poolObject.prefab.name];
                 if (pool == null)
                 {
@@ -46,7 +46,7 @@ namespace MegaCrush.ObjectPool
             }
             else
             {
-                Debug.Log("create new pool: " + poolObject.prefab);
+                Debug.Log("create new pool...");
                 pool = new PoolObjects
                 {
                     settings =  poolObject,

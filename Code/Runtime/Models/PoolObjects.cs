@@ -10,6 +10,7 @@ namespace MegaCrush.ObjectPool
     [Serializable]
     public class PoolObjects
     {
+        public PoolObjectSetting settings;
         public List<GameObject> instances;
         public int currentIndex;
 
@@ -20,6 +21,19 @@ namespace MegaCrush.ObjectPool
         public GameObject GetInstance()
         {
             var instance = instances[currentIndex];
+            if (settings.parent)
+            {
+                // check if this is a UI element
+                if (instance.TryGetComponent(out RectTransform uiTransform))
+                {
+                    instance.transform.SetParent(settings.parent, false);
+                }
+                else
+                {
+                    instance.transform.parent = settings.parent;    
+                }
+                
+            }
             instance.SetActive(true);
 
             if (++currentIndex >= instances.Count)

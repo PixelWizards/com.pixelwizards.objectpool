@@ -32,18 +32,45 @@ namespace MegaCrush.ObjectPool
         /// Creates a new PoolObject which will hold instances of the prefab.
         /// </summary>
         /// <param name="poolObject">Settings of the pooled prefab</param>
-        private static void CreatePoolObjects(PoolObjectSetting poolObject)
+        private static void CreatePoolObjects(PoolObjectSetting poolObject, bool expandExistingPool = false)
         {
-            var pool = new PoolObjects
+            var pool = new PoolObjects();
+            if (expandExistingPool)
             {
-                instances = new List<GameObject>(poolObject.count),
-                currentIndex = 0
-            };
-
-            for (int i = 0; i < poolObject.count; ++i)
+                Debug.Log("expanding pool: :" + poolObject.prefab);
+                pool = objectsMap[poolObject.prefab.name];
+                if (pool == null)
+                {
+                    Debug.LogError("Couldn't find existing pool to expand");
+                }
+            }
+            else
             {
-                var instance = Instantiate(poolObject.prefab);
-
+                Debug.Log("create new pool: " + poolObject.prefab);
+                pool = new PoolObjects
+                {
+                    settings =  poolObject,
+                    instances = new List<GameObject>(),
+                    currentIndex = 0
+                };
+    
+            }
+            
+            for (var i = 0; i < poolObject.count; ++i)
+            {
+                var instance = poolObject.parent ? Instantiate(poolObject.prefab, poolObject.parent) : Instantiate(poolObject.prefab);
+                if (instance.TryGetComponent(out RectTransform rectTransform))
+                {
+                    instance.transform.SetParent(poolObject.parent,false);
+                }
+                else
+                {
+                    if (poolObject.parent && instance.transform.parent == null)
+                    {
+                        instance.transform.parent = poolObject.parent;
+                    }  
+                }
+                
                 instance.SetActive(false);
 
                 pool.instances.Add(instance);
@@ -67,21 +94,52 @@ namespace MegaCrush.ObjectPool
             var guid = Guid.NewGuid();
             if (instance == null)
             {
-                // add more objects if we ran out
-                var poolObjSet = new PoolObjectSetting()
+                Debug.Log("NO objects in pool, creating more!");
+                var settings = GetObjectPoolSettings(prefab);
+                if (settings != null)
                 {
-                    prefab = prefab,
-                    count = 20
-                };
+                    // expand existing pool
+                    settings.count += 20;
+                    // create more objects for the pool
+                    CreatePoolObjects(settings, true);
+                }
+                else
+                {
+                    // couldn't find the existing pool, create a new one
+                    settings = new PoolObjectSetting()
+                    {
+                        prefab = prefab,
+                        count = 20,
+                    };
+                    // create more objects for the pool
+                    CreatePoolObjects(settings, false);
+                }
 
-                CreatePoolObjects(poolObjSet);
-
+                
+                // and then get an instance
+                if (instance == null)
+                {
+                    instance = GetInstance(prefab);
+                }
                 instance.name = name + "_" + guid.ToString();
                 return GetInstance(name);
             }
 
             instance.name = name + "_" + guid.ToString();
             return instance;
+        }
+
+        private static PoolObjectSetting GetObjectPoolSettings(GameObject prefab)
+        {
+            foreach (var existingPools in objectsMap)
+            {
+                if (existingPools.Value.settings.prefab == prefab)
+                {
+                    return existingPools.Value.settings;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -96,7 +154,6 @@ namespace MegaCrush.ObjectPool
             {
                 return null;
             }
-            
             return pool.GetInstance();
         }
 

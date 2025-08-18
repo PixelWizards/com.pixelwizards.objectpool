@@ -9,6 +9,7 @@ namespace MegaCrush.ObjectPool
     [Serializable]
     public class PoolObjectSetting
     {
+        public Transform parent;        // create the objects under this parent
         public GameObject prefab;
         public int count;
     }

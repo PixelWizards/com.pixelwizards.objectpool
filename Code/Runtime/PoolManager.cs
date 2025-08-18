@@ -57,26 +57,31 @@ namespace MegaCrush.ObjectPool
 
             for (int i = 0; i < poolObject.count; ++i)
             {
-                // IMPORTANT: To avoid firing OnEnable during warmup:
-                // keep the prefab ASSET inactive in the project. This SetActive(false)
-                // ensures runtime state, but source asset active=true still fires once on instantiate.
                 var instance = poolObject.parent
                     ? UnityEngine.Object.Instantiate(poolObject.prefab, poolObject.parent)
                     : UnityEngine.Object.Instantiate(poolObject.prefab);
 
-                instance.SetActive(false); // ensure inactive post-instantiate
+                instance.SetActive(false); // keep inactive during warmup
 
-                // Preserve UI parenting when needed
-                if (instance.TryGetComponent(out RectTransform _))
-                    instance.transform.SetParent(poolObject.parent, false);
-                else if (poolObject.parent && instance.transform.parent == null)
-                    instance.transform.parent = poolObject.parent;
+                // ★ Always enforce correct parenting semantics after instantiate
+                if (poolObject.parent)
+                {
+                    if (instance.TryGetComponent(out RectTransform _))
+                        instance.transform.SetParent(poolObject.parent, false); // UI: keep local values sane
+                    else
+                        instance.transform.SetParent(poolObject.parent, true); // non-UI: preserve world
+                }
+
+                // ★ (Optional) Normalize UI rect once on warmup to avoid prefab drift
+                // if (instance.TryGetComponent(out RectTransform rt))
+                //     ResetUIRect(rt);
 
                 pool.instances.Add(instance);
             }
 
             IsWarming = false;
         }
+
 
         /// <summary>
         /// Get an instance by prefab reference. Expands if exhausted.
@@ -135,12 +140,36 @@ namespace MegaCrush.ObjectPool
         {
             if (instance == null) return;
 
-            // Give components a chance to clean up before deactivation.
             foreach (var h in instance.GetComponentsInChildren<IPooledDespawnHandler>(true))
                 h.OnReturnedToPool();
 
+            // ★ Reparent back to the pool's configured parent, if any
+            if (TryGetPoolForInstance(instance, out var pool) && pool?.settings?.parent)
+            {
+                // UI vs non-UI semantics
+                if (instance.TryGetComponent(out RectTransform _))
+                    instance.transform.SetParent(pool.settings.parent, false);
+                else
+                    instance.transform.SetParent(pool.settings.parent, true);
+            }
+
             instance.SetActive(false);
         }
+
+        // ★ Helper: map an instance back to its pool by prefab name key.
+        // Easiest robust way: look up by original prefab name prefix (you already rename on GetInstance).
+        private static bool TryGetPoolForInstance(GameObject instance, out PoolObjects pool)
+        {
+            pool = null;
+            // Your GetInstance renames to $"{prefabName}_{GUID}"
+            // Extract prefix up to first '_' to recover prefabName.
+            var name = instance.name;
+            var underscore = name.IndexOf('_');
+            var prefabKey = underscore > 0 ? name.Substring(0, underscore) : name;
+
+            return objectsMap.TryGetValue(prefabKey, out pool);
+        }
+
 
         private static PoolObjectSetting GetObjectPoolSettings(GameObject prefab)
         {
@@ -149,6 +178,7 @@ namespace MegaCrush.ObjectPool
                 if (kvp.Value.settings.prefab == prefab)
                     return kvp.Value.settings;
             }
+
             return null;
         }
 
@@ -162,6 +192,7 @@ namespace MegaCrush.ObjectPool
                 name = prefab.name;
                 cachedObjectNames.Add(prefab.GetInstanceID(), name);
             }
+
             return name;
         }
     }

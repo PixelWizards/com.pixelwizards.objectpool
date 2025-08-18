@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 11cd8d8d3359f424994ea7723bd6055c
+guid: ebd463ba2a88f934babf3f80fbc966c1
 TextScriptImporter:
   externalObjects: {}
   userData: 
@@ -10,5 +10,5 @@ AssetOrigin:
   productId: 277419
   packageName: Runtime Spawner
   packageVersion: 1.1.0
-  assetPath: Packages/com.megacrush.objectpool/README.md
+  assetPath: Packages/com.megacrush.objectpool/LICENSE.md
   uploadId: 753217

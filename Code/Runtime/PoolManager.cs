@@ -1,188 +1,167 @@
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
+using MegaCrush.ObjectPool.Interfaces;
 
 namespace MegaCrush.ObjectPool
 {
     /// <summary>
-    /// Simple Pooling system for GameObjects.
-    /// It instantiates multiple instances of predefined prefabs 
-    /// and keeps them in a scene.
-    ///
-    /// The Pool Manager does not need to be instantiated in the scene, all
-    /// methods are static and can be accessed without a reference, like so:
-    ///
-    /// PoolManager.GetInstance("prefabName");
+    /// Simple pooling system for GameObjects.
     /// </summary>
     public class PoolManager : MonoBehaviour
     {
-        private static Dictionary<string, PoolObjects> objectsMap = new Dictionary<string, PoolObjects>();
-        private static Dictionary<int, string> cachedObjectNames = new Dictionary<int, string>();
+        private static readonly Dictionary<string, PoolObjects> objectsMap = new();
+        private static readonly Dictionary<int, string> cachedObjectNames = new();
 
         /// <summary>
-        /// Create a new pool and prep it 
+        /// True while the pool is instantiating (warmup/expansion).
+        /// Helpful as a guard if any legacy logic still runs in OnEnable.
         /// </summary>
-        /// <param name="thisObject"></param>
-        public static void AddNewObjectPool( PoolObjectSetting thisObject)
+        public static bool IsWarming { get; private set; }
+
+        /// <summary>
+        /// Register a new pool and pre-instantiate its objects.
+        /// </summary>
+        public static void AddNewObjectPool(PoolObjectSetting thisObject)
         {
-            CreatePoolObjects(thisObject);
+            CreatePoolObjects(thisObject, expandExistingPool: false);
         }
 
         /// <summary>
-        /// Creates a new PoolObject which will hold instances of the prefab.
+        /// Create (or expand) a pool's instances.
         /// </summary>
-        /// <param name="poolObject">Settings of the pooled prefab</param>
         private static void CreatePoolObjects(PoolObjectSetting poolObject, bool expandExistingPool = false)
         {
-            var pool = new PoolObjects();
+            IsWarming = true;
+
+            PoolObjects pool;
             if (expandExistingPool)
             {
-                Debug.Log("expanding pool: :" + poolObject.prefab);
-                pool = objectsMap[poolObject.prefab.name];
-                if (pool == null)
+                if (!objectsMap.TryGetValue(poolObject.prefab.name, out pool) || pool == null)
                 {
-                    Debug.LogError("Couldn't find existing pool to expand");
+                    Debug.LogError("PoolManager: Couldn't find existing pool to expand.");
+                    IsWarming = false;
+                    return;
                 }
             }
             else
             {
-                Debug.Log("create new pool: " + poolObject.prefab);
                 pool = new PoolObjects
                 {
-                    settings =  poolObject,
+                    settings = poolObject,
                     instances = new List<GameObject>(),
                     currentIndex = 0
                 };
-    
+                objectsMap[poolObject.prefab.name] = pool;
             }
-            
-            for (var i = 0; i < poolObject.count; ++i)
+
+            for (int i = 0; i < poolObject.count; ++i)
             {
-                var instance = poolObject.parent ? Instantiate(poolObject.prefab, poolObject.parent) : Instantiate(poolObject.prefab);
-                if (instance.TryGetComponent(out RectTransform rectTransform))
-                {
-                    instance.transform.SetParent(poolObject.parent,false);
-                }
-                else
-                {
-                    if (poolObject.parent && instance.transform.parent == null)
-                    {
-                        instance.transform.parent = poolObject.parent;
-                    }  
-                }
-                
-                instance.SetActive(false);
+                // IMPORTANT: To avoid firing OnEnable during warmup:
+                // keep the prefab ASSET inactive in the project. This SetActive(false)
+                // ensures runtime state, but source asset active=true still fires once on instantiate.
+                var instance = poolObject.parent
+                    ? UnityEngine.Object.Instantiate(poolObject.prefab, poolObject.parent)
+                    : UnityEngine.Object.Instantiate(poolObject.prefab);
+
+                instance.SetActive(false); // ensure inactive post-instantiate
+
+                // Preserve UI parenting when needed
+                if (instance.TryGetComponent(out RectTransform _))
+                    instance.transform.SetParent(poolObject.parent, false);
+                else if (poolObject.parent && instance.transform.parent == null)
+                    instance.transform.parent = poolObject.parent;
 
                 pool.instances.Add(instance);
             }
 
-            objectsMap[poolObject.prefab.name] = pool;
+            IsWarming = false;
         }
 
         /// <summary>
-        /// Returns pooled GameObject. If it does not exists in the pool,
-        /// it creates a new pool for it.
+        /// Get an instance by prefab reference. Expands if exhausted.
         /// </summary>
-        /// <param name="prefab">Which prefab (template) to pool</param>
-        /// <returns>Pooled GameObject</returns>
         public static GameObject GetInstance(GameObject prefab)
         {
             var name = GetObjectName(prefab);
             var instance = GetInstance(name);
-            // give this instance a unique name
 
-            var guid = Guid.NewGuid();
             if (instance == null)
             {
-                Debug.Log("NO objects in pool, creating more!");
+                Debug.Log($"PoolManager: No inactive instances for '{name}', creating more.");
                 var settings = GetObjectPoolSettings(prefab);
                 if (settings != null)
                 {
-                    // expand existing pool
-                    settings.count += 20;
-                    // create more objects for the pool
-                    CreatePoolObjects(settings, true);
+                    settings.count += 20; // growth step
+                    CreatePoolObjects(settings, expandExistingPool: true);
                 }
                 else
                 {
-                    // couldn't find the existing pool, create a new one
-                    settings = new PoolObjectSetting()
+                    settings = new PoolObjectSetting
                     {
                         prefab = prefab,
-                        count = 20,
+                        count = 20
                     };
-                    // create more objects for the pool
-                    CreatePoolObjects(settings, false);
+                    CreatePoolObjects(settings, expandExistingPool: false);
                 }
 
-                
-                // and then get an instance
+                instance = GetInstance(name);
                 if (instance == null)
                 {
-                    instance = GetInstance(prefab);
+                    Debug.LogError($"PoolManager: Failed to fetch instance for '{name}' after expansion.");
+                    return null;
                 }
-                instance.name = name + "_" + guid.ToString();
-                return GetInstance(name);
             }
 
-            instance.name = name + "_" + guid.ToString();
-            return instance;
+            instance.name = $"{name}_{Guid.NewGuid()}";
+            return instance; // return the one we actually fetched & named
+        }
+
+        /// <summary>
+        /// Get an instance by pool name (prefab name).
+        /// </summary>
+        public static GameObject GetInstance(string name)
+        {
+            if (!objectsMap.TryGetValue(name, out var pool))
+                return null;
+
+            return pool.GetInstance(); // returns null if all are active
+        }
+
+        /// <summary>
+        /// Return an instance to the pool.
+        /// </summary>
+        public static void ReturnInstance(GameObject instance)
+        {
+            if (instance == null) return;
+
+            // Give components a chance to clean up before deactivation.
+            foreach (var h in instance.GetComponentsInChildren<IPooledDespawnHandler>(true))
+                h.OnReturnedToPool();
+
+            instance.SetActive(false);
         }
 
         private static PoolObjectSetting GetObjectPoolSettings(GameObject prefab)
         {
-            foreach (var existingPools in objectsMap)
+            foreach (var kvp in objectsMap)
             {
-                if (existingPools.Value.settings.prefab == prefab)
-                {
-                    return existingPools.Value.settings;
-                }
+                if (kvp.Value.settings.prefab == prefab)
+                    return kvp.Value.settings;
             }
-
             return null;
         }
 
         /// <summary>
-        /// Returns pooled object by its name.
+        /// Cached prefab name (avoids GC).
         /// </summary>
-        /// <param name="name">Name of the GameObject</param>
-        /// <returns>Pooled GameObject</returns>
-        public static GameObject GetInstance(string name)
-        {
-            PoolObjects pool;
-            if (!objectsMap.TryGetValue(name, out pool))
-            {
-                return null;
-            }
-            return pool.GetInstance();
-        }
-
-        /// <summary>
-        /// Return object to the pool.
-        /// </summary>
-        /// <param name="instance">GameObject to return</param>
-        public static void ReturnInstance(GameObject instance)
-        {
-            instance.SetActive(false);
-        }
-
-        /// <summary>
-        /// Gets name of the prefab. 
-        /// Directly accessing prefab.name creates a memory garbage in Unity,
-        /// so we cached the names and access them by prefab Ids.
-        /// </summary>
-        /// <param name="prefab">The prefab</param>
-        /// <returns>Prefab's name</returns>
         public static string GetObjectName(GameObject prefab)
         {
-            string name;
-            if (!cachedObjectNames.TryGetValue(prefab.GetInstanceID(), out name))
+            if (!cachedObjectNames.TryGetValue(prefab.GetInstanceID(), out var name))
             {
                 name = prefab.name;
-
                 cachedObjectNames.Add(prefab.GetInstanceID(), name);
             }
-
             return name;
         }
     }

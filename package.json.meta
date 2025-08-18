@@ -5,3 +5,10 @@ PackageManifestImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 277419
+  packageName: Runtime Spawner
+  packageVersion: 1.1.0
+  assetPath: Packages/com.megacrush.objectpool/package.json
+  uploadId: 753217

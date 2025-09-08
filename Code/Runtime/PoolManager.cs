@@ -61,6 +61,10 @@ namespace MegaCrush.ObjectPool
                     ? UnityEngine.Object.Instantiate(poolObject.prefab, poolObject.parent)
                     : UnityEngine.Object.Instantiate(poolObject.prefab);
 
+                // NEW: if it has an agent, disable it until placement
+                if (instance.TryGetComponent<UnityEngine.AI.NavMeshAgent>(out var agent))
+                    agent.enabled = false;
+                
                 instance.SetActive(false); // keep inactive during warmup
 
                 // ★ Always enforce correct parenting semantics after instantiate
@@ -91,9 +95,9 @@ namespace MegaCrush.ObjectPool
             var name = GetObjectName(prefab);
             var instance = GetInstance(name);
 
-            if (instance == null)
+            if (!instance)
             {
-                Debug.Log($"PoolManager: No inactive instances for '{name}', creating more.");
+//                Debug.Log($"PoolManager: No inactive instances for '{name}', creating more.");
                 var settings = GetObjectPoolSettings(prefab);
                 if (settings != null)
                 {
@@ -136,6 +140,10 @@ namespace MegaCrush.ObjectPool
         /// <summary>
         /// Return an instance to the pool.
         /// </summary>
+        /// <remarks>
+        /// In addition to disabling the instance, any <see cref="UnityEngine.AI.NavMeshAgent"/> on the instance
+        /// is explicitly disabled to ensure safe re-checkout and placement by runtime systems.
+        /// </remarks>
         public static void ReturnInstance(GameObject instance)
         {
             if (instance == null) return;
@@ -153,9 +161,13 @@ namespace MegaCrush.ObjectPool
                     instance.transform.SetParent(pool.settings.parent, true);
             }
 
+            // NEW: ensure agents are disabled before pooling (prevents off-mesh agent activation on next checkout)
+            if (instance.TryGetComponent<UnityEngine.AI.NavMeshAgent>(out var agent))
+                agent.enabled = false;
+
             instance.SetActive(false);
         }
-
+        
         // ★ Helper: map an instance back to its pool by prefab name key.
         // Easiest robust way: look up by original prefab name prefix (you already rename on GetInstance).
         private static bool TryGetPoolForInstance(GameObject instance, out PoolObjects pool)

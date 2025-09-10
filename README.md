@@ -1,26 +1,72 @@
 # com.pixelwizards.objectpool
 
-Object pooling system for Unity.
+Lightweight object pooling for Unity.
 
-Documentation is online:
-https://www.megacrush.app/api/object-pool
+**Docs:** https://www.megacrush.app/api/object-pool
+  
+---  
 
-No editor-facing functionality.
+## Quick start
 
-Create new Object pools with:
+    using MegaCrush.ObjectPool;  
+    using UnityEngine;  
+      
+    public class Example : MonoBehaviour  
+    {  
+     [SerializeField] GameObject prefab;  
+      void Awake() 
+      { 
+       // Create a pool (e.g., 10 preallocated) 
+       PoolManager.AddNewObjectPool(new oolObjectSetting { prefab = prefab, count  = 10, });
+             
+       // (Optional) Prewarm more for smoother frames 
+       // PoolManager.Prewarm(prefab, 20 /*extra*/, parent: null);
+      }  
+      void Spawn() 
+      { 
+       // Get an instance (returned INACTIVE by default) 
+       var go = PoolManager.GetInstance(prefab);  
+       // Position / setup, then activate 
+       go.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity); 
+       go.SetActive(true); 
+      }  
+      void Despawn(GameObject go) 
+      { 
+       // Return to pool (idempotent / safe) 
+       PoolManager.ReturnInstance(go); 
+      }
+    }
 
-GameObject prefab;
+## API cheatsheet
 
-PoolManager.AddNewObjectPool(new PoolObjectSetting()
-{
-	count = 10,
-	prefab = prefab,
-});
+-   `AddNewObjectPool(PoolObjectSetting setting)`
 
-Get an instance from the Pool:
+    -   Creates a pool for `setting.prefab` with initial `setting.count`.
 
-var instance = PoolManager.GetInstance(prefab);
+    -   (Package ≥ 1.2) Supports organizing under a parent transform for UI workflows.
 
-Return the Instance to the Pool:
+-   `GetInstance(GameObject prefab)` → `GameObject`
 
-PoolManager.ReturnInstance(thisObject);
+    -   Retrieves an **inactive** instance from the pool (or grows as needed).
+
+-   `ReturnInstance(GameObject instance)`
+
+    -   Returns an instance to its pool (safe to call once; ignores destroyed objects).
+
+-   _(Package ≥ 1.2, optional helpers)_
+
+    -   `EnsurePool(GameObject prefab, int capacity)`
+
+    -   `Prewarm(GameObject prefab, int count, Transform parent = null)`
+
+
+----------
+
+## Notes
+
+-   Keep instances **inactive** until positioned/configured, then call `SetActive(true)`.
+
+-   Pools expand gradually to avoid spikes.
+
+-   Designed to work well with gameplay objects **and** UI elements.
+

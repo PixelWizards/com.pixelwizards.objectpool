@@ -4,13 +4,21 @@ using UnityEngine;
 namespace MegaCrush.ObjectPool
 {
     /// <summary>
-    /// Which prefab we want to pool and how many copies
+    /// Which prefab we want to pool and how many copies.
     /// </summary>
     [Serializable]
     public class PoolObjectSetting
     {
-        public Transform parent;        // create the objects under this parent
+        [Tooltip("Optional explicit pool name. If empty, falls back to prefab.name")]
+        public string name;
+
+        [Tooltip("Create the pooled instances under this parent (optional)")]
+        public Transform parent;
+
+        [Tooltip("Prefab to pool")]
         public GameObject prefab;
-        public int count;
+
+        [Tooltip("Initial pool size")]
+        public int count = 10;
     }
 }

@@ -25,8 +25,18 @@ namespace MegaCrush.ObjectPool
         /// </summary>
         public static void AddNewObjectPool(PoolObjectSetting thisObject)
         {
-            CreatePoolObjects(thisObject, expandExistingPool: false);
-        }
+			bool expandExistingPool = false;
+
+			// check if we have an existing pool before creating a new one
+			if (thisObject != null && thisObject.prefab)
+			{
+				string poolName = GetPoolName(thisObject);
+				if (!string.IsNullOrEmpty(poolName) && objectsMap.ContainsKey(poolName))
+					expandExistingPool = true;
+			}
+
+			CreatePoolObjects(thisObject, expandExistingPool);
+		}
 
         /// <summary>
         /// Create (or expand) a pool's instances.

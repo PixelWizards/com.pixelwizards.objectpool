@@ -14,34 +14,110 @@ namespace MegaCrush.ObjectPool
         private static readonly Dictionary<int, string> cachedObjectNames = new();           // prefabID -> prefabName
         private static readonly Dictionary<int, string> instanceToPoolName = new();          // instanceID -> poolName
 
+        // Singleton instance used only for driving Update-based warmup.
+        private static PoolManager _instance;
+
+        // Simple queued expansion job.
+        private class ExpansionJob
+        {
+            public PoolObjects pool;
+            public PoolObjectSetting settings;
+            public int remaining;
+        }
+
+        // Queue of expansion jobs that will be processed over multiple frames.
+        private static readonly Queue<ExpansionJob> s_expansionQueue = new();
+
+        // How many instances we’re allowed to Instantiate per frame during time-sliced expansion.
+        private int maxInstantiatesPerFrame = 8;
+
+		/// <summary>
+		/// Global budget for how many pooled instances can be instantiated per frame
+		/// during time-sliced expansion.
+		/// </summary>
+		public static int MaxInstantiatesPerFrame
+		{
+			get => _instance != null ? Mathf.Max(1, _instance.maxInstantiatesPerFrame) : 8;
+			set
+			{
+				if (_instance != null)
+					_instance.maxInstantiatesPerFrame = Mathf.Max(1, value);
+			}
+		}
+
         /// <summary>
         /// True while the pool is instantiating (warmup/expansion).
         /// Helpful as a guard if any legacy logic still runs in OnEnable.
         /// </summary>
         public static bool IsWarming { get; private set; }
 
+        private void Awake()
+        {
+            if (_instance != null && _instance != this)
+            {
+                // Only one PoolManager should be active. Extra instances can be safely destroyed.
+                Destroy(gameObject);
+                return;
+            }
+
+            _instance = this;
+        }
+
+        private void Update()
+        {
+            if (s_expansionQueue.Count == 0)
+                return;
+
+            IsWarming = true;
+
+            int budget = MaxInstantiatesPerFrame;
+
+            while (budget > 0 && s_expansionQueue.Count > 0)
+            {
+                var job = s_expansionQueue.Peek();
+                if (job.pool == null || job.settings == null || job.remaining <= 0)
+                {
+                    s_expansionQueue.Dequeue();
+                    continue;
+                }
+
+                int toSpawn = Mathf.Min(job.remaining, budget);
+                InternalCreateInstances(job.pool, job.settings, toSpawn);
+
+                job.remaining -= toSpawn;
+                budget -= toSpawn;
+
+                if (job.remaining <= 0)
+                    s_expansionQueue.Dequeue();
+            }
+
+            if (s_expansionQueue.Count == 0)
+                IsWarming = false;
+        }
+
         /// <summary>
         /// Register a new pool and pre-instantiate its objects.
         /// </summary>
         public static void AddNewObjectPool(PoolObjectSetting thisObject)
         {
-			bool expandExistingPool = false;
+            bool expandExistingPool = false;
 
-			// check if we have an existing pool before creating a new one
-			if (thisObject != null && thisObject.prefab)
-			{
-				string poolName = GetPoolName(thisObject);
-				if (!string.IsNullOrEmpty(poolName) && objectsMap.ContainsKey(poolName))
-					expandExistingPool = true;
-			}
+            // check if we have an existing pool before creating a new one
+            if (thisObject != null && thisObject.prefab)
+            {
+                string poolName = GetPoolName(thisObject);
+                if (!string.IsNullOrEmpty(poolName) && objectsMap.ContainsKey(poolName))
+                    expandExistingPool = true;
+            }
 
-			CreatePoolObjects(thisObject, expandExistingPool);
-		}
+            // Initial setup/warmup remains synchronous (no time slicing).
+            CreatePoolObjects(thisObject, expandExistingPool, timeSliced: false);
+        }
 
         /// <summary>
         /// Create (or expand) a pool's instances.
         /// </summary>
-        private static void CreatePoolObjects(PoolObjectSetting poolObject, bool expandExistingPool = false)
+        private static void CreatePoolObjects(PoolObjectSetting poolObject, bool expandExistingPool = false, bool timeSliced = false)
         {
             if (poolObject == null || poolObject.prefab == null)
             {
@@ -56,15 +132,12 @@ namespace MegaCrush.ObjectPool
                 return;
             }
 
-            IsWarming = true;
-
             PoolObjects pool;
             if (expandExistingPool)
             {
                 if (!objectsMap.TryGetValue(poolName, out pool) || pool == null)
                 {
                     Debug.LogError($"PoolManager: Couldn't find existing pool '{poolName}' to expand.");
-                    IsWarming = false;
                     return;
                 }
             }
@@ -80,7 +153,43 @@ namespace MegaCrush.ObjectPool
             }
 
             int toCreate = Mathf.Max(0, poolObject.count);
-            for (int i = 0; i < toCreate; ++i)
+            if (toCreate <= 0)
+                return;
+
+            if (timeSliced)
+            {
+                // If we don't have a driver instance, fall back to immediate expansion.
+                if (_instance == null)
+                {
+                    Debug.LogWarning("PoolManager: No PoolManager instance in scene; falling back to immediate expansion.");
+                    IsWarming = true;
+                    InternalCreateInstances(pool, poolObject, toCreate);
+                    IsWarming = false;
+                    return;
+                }
+
+                IsWarming = true;
+                s_expansionQueue.Enqueue(new ExpansionJob
+                {
+                    pool = pool,
+                    settings = poolObject,
+                    remaining = toCreate
+                });
+            }
+            else
+            {
+                IsWarming = true;
+                InternalCreateInstances(pool, poolObject, toCreate);
+                IsWarming = false;
+            }
+        }
+
+        /// <summary>
+        /// Actually instantiates instances and appends them to the pool.
+        /// </summary>
+        private static void InternalCreateInstances(PoolObjects pool, PoolObjectSetting poolObject, int count)
+        {
+            for (int i = 0; i < count; ++i)
             {
                 // Do NOT touch components on the prefab asset; only on the instance.
                 var instance = poolObject.parent
@@ -104,8 +213,6 @@ namespace MegaCrush.ObjectPool
 
                 pool.instances.Add(instance);
             }
-
-            IsWarming = false;
         }
 
         /// <summary>
@@ -146,7 +253,9 @@ namespace MegaCrush.ObjectPool
                 {
                     // growth step
                     settings.count = Mathf.Max(1, Mathf.Max(settings.count, 1) * 2);
-                    CreatePoolObjects(settings, expandExistingPool: true);
+
+                    // Runtime expansions are time-sliced to avoid frame spikes.
+                    CreatePoolObjects(settings, expandExistingPool: true, timeSliced: true);
                 }
                 else if (prefabForFallbackExpansion != null)
                 {
@@ -157,7 +266,7 @@ namespace MegaCrush.ObjectPool
                         prefab = prefabForFallbackExpansion,
                         count = 20
                     };
-                    CreatePoolObjects(s, expandExistingPool: false);
+                    CreatePoolObjects(s, expandExistingPool: false, timeSliced: true);
                 }
                 else
                 {

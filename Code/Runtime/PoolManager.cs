@@ -13,6 +13,8 @@ namespace MegaCrush.ObjectPool
         private static readonly Dictionary<string, PoolObjects> objectsMap = new();          // key: poolName
         private static readonly Dictionary<int, string> cachedObjectNames = new();           // prefabID -> prefabName
         private static readonly Dictionary<int, string> instanceToPoolName = new();          // instanceID -> poolName
+		// NEW: prefabID -> pool (prevents same-name prefab collisions)
+		private static readonly Dictionary<int, PoolObjects> poolsByPrefabId = new();
 
         // Singleton instance used only for driving Update-based warmup.
         private static PoolManager _instance;
@@ -125,32 +127,41 @@ namespace MegaCrush.ObjectPool
                 return;
             }
 
-            string poolName = GetPoolName(poolObject);
-            if (string.IsNullOrEmpty(poolName))
-            {
-                Debug.LogError("PoolManager: Pool name could not be resolved.");
-                return;
-            }
+			string poolName = GetPoolName(poolObject);
+			if (string.IsNullOrEmpty(poolName))
+			{
+				Debug.LogError("PoolManager: Pool name could not be resolved.");
+				return;
+			}
 
-            PoolObjects pool;
-            if (expandExistingPool)
-            {
-                if (!objectsMap.TryGetValue(poolName, out pool) || pool == null)
-                {
-                    Debug.LogError($"PoolManager: Couldn't find existing pool '{poolName}' to expand.");
-                    return;
-                }
-            }
-            else
-            {
-                pool = new PoolObjects
-                {
-                    settings = poolObject,
-                    instances = new List<GameObject>(),
-                    currentIndex = 0
-                };
-                objectsMap[poolName] = pool;
-            }
+			int prefabId = poolObject.prefab.GetInstanceID(); // NEW
+
+			PoolObjects pool;
+			if (expandExistingPool)
+			{
+				if (!objectsMap.TryGetValue(poolName, out pool) || pool == null)
+				{
+					Debug.LogError($"PoolManager: Couldn't find existing pool '{poolName}' to expand.");
+					return;
+				}
+
+				// NEW: ensure prefab->pool mapping exists
+				if (!poolsByPrefabId.ContainsKey(prefabId))
+					poolsByPrefabId[prefabId] = pool;
+			}
+			else
+			{
+				pool = new PoolObjects
+				{
+					settings = poolObject,
+					instances = new List<GameObject>(),
+					currentIndex = 0
+				};
+				objectsMap[poolName] = pool;
+
+				// NEW
+				poolsByPrefabId[prefabId] = pool;
+			}
 
             int toCreate = Mathf.Max(0, poolObject.count);
             if (toCreate <= 0)
@@ -218,14 +229,65 @@ namespace MegaCrush.ObjectPool
         /// <summary>
         /// Get an instance by prefab reference. Expands if exhausted.
         /// </summary>
-        public static GameObject GetInstance(GameObject prefab)
-        {
-            if (!prefab)
-                return null;
+		public static GameObject GetInstance(GameObject prefab)
+		{
+			if (!prefab)
+				return null;
 
-            string poolName = GetObjectName(prefab);       // defaults to prefab.name
-            return GetInstanceByNameInternal(poolName, prefab);
-        }
+			int prefabId = prefab.GetInstanceID();
+
+			// NEW: use prefab identity first (prevents name collisions)
+			if (poolsByPrefabId.TryGetValue(prefabId, out var pool) && pool != null)
+			{
+				var instance = pool.GetInstance(); // may return null if all active
+				if (!instance)
+				{
+					// Expand using current settings clone
+					var settings = pool.settings;
+					if (settings != null)
+					{
+						settings.count = Mathf.Max(1, Mathf.Max(settings.count, 1) * 2);
+						CreatePoolObjects(settings, expandExistingPool: true, timeSliced: true);
+					}
+					else
+					{
+						// Shouldn't happen, but safe fallback
+						var s = new PoolObjectSetting
+						{
+							name = GetObjectName(prefab),
+							prefab = prefab,
+							count = 20
+						};
+						CreatePoolObjects(s, expandExistingPool: false, timeSliced: true);
+					}
+
+					instance = pool.GetInstance();
+					if (!instance)
+					{
+						Debug.LogError($"PoolManager: Failed to fetch instance for prefab '{prefab.name}' after expansion.");
+						return null;
+					}
+				}
+
+				// Map instance->poolName for ReturnInstance (still fine)
+				string poolName = GetObjectName(prefab);
+				instanceToPoolName[instance.GetInstanceID()] = poolName;
+
+				// Cosmetic
+				instance.name = $"{poolName}_{Guid.NewGuid()}";
+				return instance;
+			}
+
+			// No pool yet: create a pool for this prefab and retry
+			AddNewObjectPool(new PoolObjectSetting
+			{
+				name = GetObjectName(prefab),
+				prefab = prefab,
+				count = 1
+			});
+
+			return GetInstance(prefab);
+		}
 
         /// <summary>
         /// Get an instance by pool name. Expands if exhausted (requires that pool was created).

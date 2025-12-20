@@ -6,7 +6,7 @@ using MegaCrush.ObjectPool.Interfaces;
 namespace MegaCrush.ObjectPool
 {
     /// <summary>
-    /// Simple pooling system for GameObjects, now with named pools.
+    /// Simple pooling system for GameObjects
     /// </summary>
     public class PoolManager : MonoBehaviour
     {

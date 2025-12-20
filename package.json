@@ -1,7 +1,7 @@
 {
   "name": "com.megacrush.objectpool",
   "displayName": "Object Pooling",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "unity": "2022.4",
   "description": "Powerful Object Pooling system.\n\nDocumentation is online: \nhttps://www.megacrush.app/api/object-pool\n\nNo editor-facing functionality.",
   "category": null,

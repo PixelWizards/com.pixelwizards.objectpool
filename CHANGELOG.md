@@ -4,6 +4,39 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-12-23
+
+### Added
+
+- **Hybrid pool expansion (immediate + time-sliced)**
+    - When a pool is exhausted, the pool manager now instantiates a **minimal number of instances immediately** (typically 1) so `GetInstance(...)` can succeed in the same frame.
+    - The remaining growth is queued and processed via the existing **time-sliced expansion** system to avoid frame spikes.
+    - Prevents runtime callers (eg. Runtime Spawner / Ambient AI) from receiving `null` during reactive growth.
+
+- **Auto-bootstrap expansion driver for time-sliced growth**
+    - Time-sliced expansion now ensures a `PoolManager` instance exists by auto-creating one if needed (via `EnsureInstance()`).
+    - Maintains compatibility with scenes that do not explicitly include a `PoolManager` object while still supporting queued expansion.
+
+### Changed
+
+- **Runtime growth strategy**
+    - Growth policy during exhaustion is now a **fixed-step expansion with clamping** (default clamp: `4–32`) rather than multiplicative doubling.
+    - Expansion step is derived from `PoolObjectSetting.count` as a **step hint** (clamped) rather than treating it as a target size.
+
+- **Expansion settings handling**
+    - Time-sliced expansion uses a **settings clone** for queued work to avoid mutating the pool’s live settings during runtime growth.
+
+### Fixed
+
+- **Reactive expansion failing to return an instance**
+    - Fixes cases where pools expanded via time-sliced growth but `GetInstance(...)` failed immediately after expansion because the queued instances had not yet been instantiated.
+    - Removes the “Failed to fetch instance after expansion” error under sustained load / burst spawning scenarios.
+
+### Notes
+
+- This is a behavior change for projects that relied on multiplicative (doubling) runtime growth. If you want larger steps, increase `PoolObjectSetting.count` (now interpreted as a growth-step hint and clamped).
+- Time-sliced expansion remains budgeted by `PoolManager.MaxInstantiatesPerFrame`.
+
 ## [1.3.0] - 2025-12-19
 
 ### Added

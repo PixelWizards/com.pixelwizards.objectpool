@@ -33,6 +33,18 @@ namespace MegaCrush.ObjectPool
         // How many instances we’re allowed to Instantiate per frame during time-sliced expansion.
         private int maxInstantiatesPerFrame = 8;
 
+        private static void EnsureInstance()
+        {
+	        if (_instance) return;
+
+	        var existing = FindFirstObjectByType<PoolManager>();
+	        if (existing) { _instance = existing; return; }
+
+	        var go = new GameObject("[PoolManager]");
+	        DontDestroyOnLoad(go);
+	        _instance = go.AddComponent<PoolManager>();
+        }
+        
 		/// <summary>
 		/// Global budget for how many pooled instances can be instantiated per frame
 		/// during time-sliced expansion.
@@ -170,7 +182,9 @@ namespace MegaCrush.ObjectPool
             if (timeSliced)
             {
                 // If we don't have a driver instance, fall back to immediate expansion.
-                if (_instance == null)
+                EnsureInstance();	// <-- this makes time-slicing “just work” by default
+                
+                if (!_instance)
                 {
                     Debug.LogWarning("PoolManager: No PoolManager instance in scene; falling back to immediate expansion.");
                     IsWarming = true;

@@ -183,7 +183,8 @@ namespace MegaCrush.ObjectPool
                 {
                     settings = poolObject,
                     instances = new List<GameObject>(),
-                    currentIndex = 0
+                    currentIndex = 0,
+                    poolName = poolName
                 };
                 objectsMap[poolName] = pool;
 
@@ -213,7 +214,7 @@ namespace MegaCrush.ObjectPool
                 {
                     pool = pool,
                     settings = poolObject,
-                    remaining = toCreate
+                    remaining = toCreate,
                 });
             }
             else
@@ -332,8 +333,7 @@ namespace MegaCrush.ObjectPool
                     }
                 }
 
-                // Map instance->poolName for ReturnInstance (still fine)
-                string poolName = GetObjectName(prefab);
+                string poolName = !string.IsNullOrEmpty(pool.poolName) ? pool.poolName : GetPoolName(pool.settings);
                 instanceToPoolName[instance.GetInstanceID()] = poolName;
 
                 // Cosmetic
@@ -452,7 +452,10 @@ namespace MegaCrush.ObjectPool
             var name = instance.name;
             var underscore = name.IndexOf('_');
             var prefabKey = underscore > 0 ? name.Substring(0, underscore) : name;
-            return objectsMap.TryGetValue(prefabKey, out pool);
+            bool ok = objectsMap.TryGetValue(prefabKey, out pool);
+            if (!ok)
+                Debug.LogWarning($"PoolManager: instance->pool mapping missing and fallback failed for '{instance.name}'.");
+            return ok;
         }
 
         private static string GetPoolName(PoolObjectSetting s)

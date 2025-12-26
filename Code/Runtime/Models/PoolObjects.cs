@@ -14,6 +14,8 @@ namespace MegaCrush.ObjectPool
         public PoolObjectSetting settings;
         public List<GameObject> instances;
         public int currentIndex;
+        
+        public string poolName;
 
         /// <summary>
         /// Retrieve the next INACTIVE instance, activate it, and notify spawn handlers.
@@ -41,8 +43,6 @@ namespace MegaCrush.ObjectPool
                         else
                             go.transform.parent = settings.parent;
                     }
-
-                    go.SetActive(true);
 
                     // Notify that this is a REAL spawn (not warmup)
                     foreach (var h in go.GetComponentsInChildren<IPooledSpawnHandler>(true))

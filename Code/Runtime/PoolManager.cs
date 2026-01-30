@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using MegaCrush.ObjectPool.Interfaces;
+using UnityEngine.SceneManagement;
 
 namespace MegaCrush.ObjectPool
 {
@@ -10,6 +11,8 @@ namespace MegaCrush.ObjectPool
     /// </summary>
     public class PoolManager : MonoBehaviour
     {
+		[SerializeField] private bool logPoolFlushOnSceneLoad = true;
+
         private static readonly Dictionary<string, PoolObjects> objectsMap = new();          // key: poolName
         private static readonly Dictionary<int, string> cachedObjectNames = new();           // prefabID -> prefabName
         private static readonly Dictionary<int, string> instanceToPoolName = new();          // instanceID -> poolName
@@ -30,6 +33,84 @@ namespace MegaCrush.ObjectPool
             public PoolObjectSetting settings;
             public int remaining;
         }
+
+		private void OnEnable()
+		{
+			SceneManager.sceneLoaded += OnSceneLoaded;
+		}
+
+		private void OnDisable()
+		{
+			SceneManager.sceneLoaded -= OnSceneLoaded;
+		}
+
+		private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+		{
+			// Only nuke on full scene loads (not additive).
+			if (mode != LoadSceneMode.Single)
+				return;
+
+			NukeAllPools(scene);
+		}
+
+		/// <summary>
+		/// Nuke the scene pool on a fresh scene load
+		/// </summary>
+		private static void NukeAllPools(Scene loadedScene)
+		{
+			// Snapshot stats before we clear everything.
+			int poolsCount = objectsMap.Count;
+			int totalInstancesTracked = 0;
+			int destroyedCount = 0;
+			int missingCount = 0;
+
+			// Stop any queued expansion work that references old pools/settings.
+			int queuedJobs = s_expansionQueue.Count;
+			s_expansionQueue.Clear();
+			IsWarming = false;
+
+			foreach (var kv in objectsMap)
+			{
+				var pool = kv.Value;
+				if (pool?.instances == null) continue;
+
+				totalInstancesTracked += pool.instances.Count;
+
+				for (int i = pool.instances.Count - 1; i >= 0; i--)
+				{
+					var go = pool.instances[i];
+
+					if (!go)
+					{
+						missingCount++;
+						continue;
+					}
+
+					UnityEngine.Object.Destroy(go);
+					destroyedCount++;
+				}
+
+				pool.instances.Clear();
+				pool.currentIndex = 0;
+			}
+
+			objectsMap.Clear();
+			poolsByPrefabId.Clear();
+			instanceToPoolName.Clear();
+			cachedObjectNames.Clear();
+
+			// Log once. We need an instance to read the serialized toggle.
+			// If no instance exists (edge cases), default to logging anyway.
+			bool shouldLog = _instance == null || _instance.logPoolFlushOnSceneLoad;
+			if (shouldLog && (poolsCount > 0 || totalInstancesTracked > 0 || queuedJobs > 0))
+			{
+				Debug.Log(
+					$"[PoolManager] Pool flush on full scene load: '{loadedScene.name}' " +
+					$"(pools={poolsCount}, trackedInstances={totalInstancesTracked}, destroyed={destroyedCount}, " +
+					$"missingRefs={missingCount}, clearedJobs={queuedJobs})"
+				);
+			}
+		}
 
         // Queue of expansion jobs that will be processed over multiple frames.
         private static readonly Queue<ExpansionJob> s_expansionQueue = new();
@@ -422,14 +503,19 @@ namespace MegaCrush.ObjectPool
             foreach (var h in instance.GetComponentsInChildren<IPooledDespawnHandler>(true))
                 h.OnReturnedToPool();
 
-            // Reparent back to the pool's configured parent, if any
-            if (TryGetPoolForInstance(instance, out var pool) && pool?.settings?.parent)
-            {
-                if (instance.TryGetComponent(out RectTransform _))
-                    instance.transform.SetParent(pool.settings.parent, false);
-                else
-                    instance.transform.SetParent(pool.settings.parent, true);
-            }
+			// Reparent back to the pool's configured parent, if any
+			if (TryGetPoolForInstance(instance, out var pool) && pool?.settings?.parent)
+			{
+				if (instance.TryGetComponent(out RectTransform _))
+					instance.transform.SetParent(pool.settings.parent, false);
+				else
+					instance.transform.SetParent(pool.settings.parent, true);
+			}
+			else
+			{
+				instance.transform.SetParent(null, true);
+			}
+
 
             // Ensure agents are disabled before pooling
             if (instance.TryGetComponent<UnityEngine.AI.NavMeshAgent>(out var agent))

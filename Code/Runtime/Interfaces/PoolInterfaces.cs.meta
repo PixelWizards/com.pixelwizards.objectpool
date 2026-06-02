@@ -1,3 +1,10 @@
 ﻿fileFormatVersion: 2
 guid: 697e9c97e834497bab59bdda6fe2f370
 timeCreated: 1754709004
+AssetOrigin:
+  serializedVersion: 1
+  productId: 277419
+  packageName: Runtime Spawner
+  packageVersion: 1.6.0
+  assetPath: Packages/com.megacrush.objectpool/Code/Runtime/Interfaces/PoolInterfaces.cs
+  uploadId: 837232

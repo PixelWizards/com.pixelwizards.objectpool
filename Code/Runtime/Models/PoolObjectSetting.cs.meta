@@ -5,6 +5,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 277419
   packageName: Runtime Spawner
-  packageVersion: 1.1.0
+  packageVersion: 1.6.0
   assetPath: Packages/com.megacrush.objectpool/Code/Runtime/Models/PoolObjectSetting.cs
-  uploadId: 753217
+  uploadId: 837232

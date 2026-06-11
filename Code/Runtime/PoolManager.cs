@@ -228,66 +228,129 @@ namespace MegaCrush.ObjectPool
 
         /// <summary>
         /// Get an instance by prefab reference. Expands if exhausted.
+        /// The returned instance is active.
         /// </summary>
-		public static GameObject GetInstance(GameObject prefab)
-		{
-			if (!prefab)
-				return null;
+        public static GameObject GetInstance(GameObject prefab)
+        {
+            return GetInstanceInternal(prefab, activate: true, hasTransform: false, Vector3.zero, Quaternion.identity, null);
+        }
 
-			EntityId prefabId = prefab.GetEntityId();
+        /// <summary>
+        /// Get an instance by prefab reference, place it before activation, then activate it.
+        /// Mirrors the important lifecycle behavior of Object.Instantiate(prefab, position, rotation, parent).
+        /// </summary>
+        public static GameObject GetInstance(GameObject prefab, Vector3 position, Quaternion rotation, Transform parent = null)
+        {
+            return GetInstanceInternal(prefab, activate: true, hasTransform: true, position, rotation, parent);
+        }
 
-			// NEW: use prefab identity first (prevents name collisions)
-			if (poolsByPrefabId.TryGetValue(prefabId, out var pool) && pool != null)
-			{
-				var instance = pool.GetInstance(); // may return null if all active
-				if (!instance)
-				{
-					// Expand using current settings clone
-					var settings = pool.settings;
-					if (settings != null)
-					{
-						settings.count = Mathf.Max(1, Mathf.Max(settings.count, 1) * 2);
-						CreatePoolObjects(settings, expandExistingPool: true, timeSliced: true);
-					}
-					else
-					{
-						// Shouldn't happen, but safe fallback
-						var s = new PoolObjectSetting
-						{
-							name = GetObjectName(prefab),
-							prefab = prefab,
-							count = 20
-						};
-						CreatePoolObjects(s, expandExistingPool: false, timeSliced: true);
-					}
+        /// <summary>
+        /// Get an inactive instance by prefab reference. Expands if exhausted.
+        /// </summary>
+        public static GameObject GetInactiveInstance(GameObject prefab)
+        {
+            return GetInstanceInternal(prefab, activate: false, hasTransform: false, Vector3.zero, Quaternion.identity, null);
+        }
 
-					instance = pool.GetInstance();
-					if (!instance)
-					{
-						Debug.LogError($"PoolManager: Failed to fetch instance for prefab '{prefab.name}' after expansion.");
-						return null;
-					}
-				}
+        /// <summary>
+        /// Get an inactive instance by prefab reference and place it before returning.
+        /// Useful for callers that need additional policy checks before activation.
+        /// </summary>
+        public static GameObject GetInactiveInstance(GameObject prefab, Vector3 position, Quaternion rotation, Transform parent = null)
+        {
+            return GetInstanceInternal(prefab, activate: false, hasTransform: true, position, rotation, parent);
+        }
 
-				// Map instance->poolName for ReturnInstance (still fine)
-				string poolName = GetObjectName(prefab);
-				instanceToPoolName[instance.GetEntityId()] = poolName;
+        private static GameObject GetInstanceInternal(
+            GameObject prefab,
+            bool activate,
+            bool hasTransform,
+            Vector3 position,
+            Quaternion rotation,
+            Transform parent)
+        {
+            if (!prefab)
+                return null;
 
-				// Cosmetic
-				instance.name = $"{poolName}_{Guid.NewGuid()}";
-				return instance;
-			}
+            EntityId prefabId = prefab.GetEntityId();
 
-			// No pool yet: create a pool for this prefab and retry
-			AddNewObjectPool(new PoolObjectSetting
-			{
-				name = GetObjectName(prefab),
-				prefab = prefab,
-				count = 1
-			});
+            // Use prefab identity first (prevents name collisions)
+            if (poolsByPrefabId.TryGetValue(prefabId, out var pool) && pool != null)
+            {
+                var instance = BorrowFromPool(pool, activate, hasTransform, position, rotation, parent);
+                if (!instance)
+                {
+                    // Expand using current settings clone
+                    var settings = pool.settings;
+                    if (settings != null)
+                    {
+                        settings.count = Mathf.Max(1, Mathf.Max(settings.count, 1) * 2);
+                        CreatePoolObjects(settings, expandExistingPool: true, timeSliced: true);
+                    }
+                    else
+                    {
+                        // Shouldn't happen, but safe fallback
+                        var s = new PoolObjectSetting
+                        {
+                            name = GetObjectName(prefab),
+                            prefab = prefab,
+                            count = 20
+                        };
+                        CreatePoolObjects(s, expandExistingPool: false, timeSliced: true);
+                    }
 
-			return GetInstance(prefab);
-		}
+                    instance = BorrowFromPool(pool, activate, hasTransform, position, rotation, parent);
+                    if (!instance)
+                    {
+                        Debug.LogError($"PoolManager: Failed to fetch instance for prefab '{prefab.name}' after expansion.");
+                        return null;
+                    }
+                }
+
+                PrepareBorrowedInstance(prefab, instance);
+                return instance;
+            }
+
+            // No pool yet: create a pool for this prefab and retry
+            AddNewObjectPool(new PoolObjectSetting
+            {
+                name = GetObjectName(prefab),
+                prefab = prefab,
+                count = 1
+            });
+
+            return GetInstanceInternal(prefab, activate, hasTransform, position, rotation, parent);
+        }
+
+        private static GameObject BorrowFromPool(
+            PoolObjects pool,
+            bool activate,
+            bool hasTransform,
+            Vector3 position,
+            Quaternion rotation,
+            Transform parent)
+        {
+            if (pool == null)
+                return null;
+
+            if (activate)
+                return hasTransform ? pool.GetInstance(position, rotation, parent) : pool.GetInstance();
+
+            return hasTransform ? pool.GetInactiveInstance(position, rotation, parent) : pool.GetInactiveInstance();
+        }
+
+        private static void PrepareBorrowedInstance(GameObject prefab, GameObject instance)
+        {
+            if (!prefab || !instance)
+                return;
+
+            // Map instance->poolName for ReturnInstance.
+            string poolName = GetObjectName(prefab);
+            instanceToPoolName[instance.GetEntityId()] = poolName;
+
+            // Cosmetic.
+            instance.name = $"{poolName}_{Guid.NewGuid()}";
+        }
 
         /// <summary>
         /// Get an instance by pool name. Expands if exhausted (requires that pool was created).

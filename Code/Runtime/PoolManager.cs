@@ -1,7 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using MegaCrush.ObjectPool.Interfaces;
+
+#if UNITY_6000_0_OR_NEWER
+using PoolObjectId = UnityEngine.EntityId;
+#else
+using PoolObjectId = System.Int32;
+#endif
 
 namespace MegaCrush.ObjectPool
 {
@@ -11,10 +17,10 @@ namespace MegaCrush.ObjectPool
     public class PoolManager : MonoBehaviour
     {
         private static readonly Dictionary<string, PoolObjects> objectsMap = new();          // key: poolName
-        private static readonly Dictionary<EntityId, string> cachedObjectNames = new();           // prefabID -> prefabName
-        private static readonly Dictionary<EntityId, string> instanceToPoolName = new();          // instanceID -> poolName
+        private static readonly Dictionary<PoolObjectId, string> cachedObjectNames = new();           // prefabID -> prefabName
+        private static readonly Dictionary<PoolObjectId, string> instanceToPoolName = new();          // instanceID -> poolName
 		// NEW: prefabID -> pool (prevents same-name prefab collisions)
-		private static readonly Dictionary<EntityId, PoolObjects> poolsByPrefabId = new();
+		private static readonly Dictionary<PoolObjectId, PoolObjects> poolsByPrefabId = new();
 
         // Singleton instance used only for driving Update-based warmup.
         private static PoolManager _instance;
@@ -134,7 +140,7 @@ namespace MegaCrush.ObjectPool
 				return;
 			}
 
-			EntityId prefabId = poolObject.prefab.GetEntityId(); // NEW
+			PoolObjectId prefabId = GetObjectId(poolObject.prefab);
 
 			PoolObjects pool;
 			if (expandExistingPool)
@@ -272,7 +278,7 @@ namespace MegaCrush.ObjectPool
             if (!prefab)
                 return null;
 
-            EntityId prefabId = prefab.GetEntityId();
+            PoolObjectId prefabId = GetObjectId(prefab);
 
             // Use prefab identity first (prevents name collisions)
             if (poolsByPrefabId.TryGetValue(prefabId, out var pool) && pool != null)
@@ -346,7 +352,7 @@ namespace MegaCrush.ObjectPool
 
             // Map instance->poolName for ReturnInstance.
             string poolName = GetObjectName(prefab);
-            instanceToPoolName[instance.GetEntityId()] = poolName;
+            instanceToPoolName[GetObjectId(instance)] = poolName;
 
             // Cosmetic.
             instance.name = $"{poolName}_{Guid.NewGuid()}";
@@ -408,7 +414,7 @@ namespace MegaCrush.ObjectPool
             }
 
             // Track mapping so ReturnInstance can find the right pool without parsing names
-            instanceToPoolName[instance.GetEntityId()] = poolName;
+            instanceToPoolName[GetObjectId(instance)] = poolName;
 
             // Keep a readable name (purely cosmetic)
             instance.name = $"{poolName}_{Guid.NewGuid()}";
@@ -441,14 +447,14 @@ namespace MegaCrush.ObjectPool
             instance.SetActive(false);
 
             // Clean mapping
-            instanceToPoolName.Remove(instance.GetEntityId());
+            instanceToPoolName.Remove(GetObjectId(instance));
         }
 
         private static bool TryGetPoolForInstance(GameObject instance, out PoolObjects pool)
         {
             pool = null;
 
-            if (instanceToPoolName.TryGetValue(instance.GetEntityId(), out var poolName))
+            if (instanceToPoolName.TryGetValue(GetObjectId(instance), out var poolName))
                 return objectsMap.TryGetValue(poolName, out pool);
 
             // Fallback: best-effort prefix parse (in case mapping was lost)
@@ -475,11 +481,20 @@ namespace MegaCrush.ObjectPool
             return GetObjectName(s.prefab);
         }
 
+        private static PoolObjectId GetObjectId(UnityEngine.Object obj)
+        {
+#if UNITY_6000_0_OR_NEWER
+            return obj.GetEntityId();
+#else
+            return obj.GetInstanceID();
+#endif
+        }
+
         /// <summary>Cached prefab name (avoids GC).</summary>
         public static string GetObjectName(GameObject prefab)
         {
             if (!prefab) return null;
-            EntityId id = prefab.GetEntityId();
+            PoolObjectId id = GetObjectId(prefab);
             if (!cachedObjectNames.TryGetValue(id, out var name))
             {
                 name = prefab.name;

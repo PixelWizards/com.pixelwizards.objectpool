@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using MegaCrush.ObjectPool.Interfaces;
@@ -14,6 +14,7 @@ namespace MegaCrush.ObjectPool
         public PoolObjectSetting settings;
         public List<GameObject> instances;
         public int currentIndex;
+        public string poolName;
 
         /// <summary>
         /// Retrieve the next INACTIVE instance, activate it, and notify spawn handlers.
@@ -74,22 +75,50 @@ namespace MegaCrush.ObjectPool
 
         private GameObject AcquireInactiveInstance()
         {
-            if (instances == null || instances.Count == 0)
-                return null;
+			if (instances == null || instances.Count == 0)
+				return null;
 
-            // Find the next inactive object (ring buffer)
-            for (int i = 0; i < instances.Count; i++)
-            {
-                int idx = (currentIndex + i) % instances.Count;
-                var go = instances[idx];
-                if (go != null && !go.activeSelf)
-                {
-                    currentIndex = (idx + 1) % instances.Count;
-                    return go;
-                }
+			// Ring buffer scan for the next usable inactive object.
+			// We also purge destroyed references as we encounter them.
+			int count = instances.Count;
+
+			for (int scan = 0; scan < count; scan++)
+			{
+				if (instances.Count == 0)
+					return null;
+
+				int idx = currentIndex % instances.Count;
+				var go = instances[idx];
+
+				// Advance index for next probe now (keeps ring behavior stable even on removals)
+				currentIndex = (idx + 1) % instances.Count;
+
+				// CRITICAL: Unity fake-null check FIRST.
+				if (!go)
+				{
+					// Remove dead entry; keep scanning.
+					instances.RemoveAt(idx);
+
+					// currentIndex already points to "next" relative to old list;
+					// after removal, it should step back one slot to avoid skipping.
+					if (instances.Count > 0)
+						currentIndex = Mathf.Clamp(currentIndex - 1, 0, instances.Count - 1);
+					else
+						currentIndex = 0;
+
+					// We reduced the list, also reduce our scan budget accordingly.
+					count--;
+					scan--;
+					continue;
+				}
+
+				// Only now is it safe to touch activeSelf / transform.
+				if (go.activeSelf)
+					continue;
+
+                return go;
             }
 
-            // All active → let PoolManager expand at the higher level.
             return null;
         }
 

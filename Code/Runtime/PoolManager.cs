@@ -74,64 +74,45 @@ namespace MegaCrush.ObjectPool
 			NukeAllPools(scene);
 		}
 
-		/// <summary>
-		/// Nuke the scene pool on a fresh scene load
-		/// </summary>
-		private static void NukeAllPools(Scene loadedScene)
-		{
-			// Snapshot stats before we clear everything.
-			int poolsCount = objectsMap.Count;
-			int totalInstancesTracked = 0;
-			int destroyedCount = 0;
-			int missingCount = 0;
+        /// <summary>Discard previous-scene instances, preserving warmup performed by new-scene Awake methods.</summary>
+        private static void NukeAllPools(Scene loadedScene)
+        {
+            var retainedIds = new HashSet<PoolObjectId>();
+            int discarded = 0;
+            foreach (var pool in objectsMap.Values)
+            {
+                if (pool?.instances == null) continue;
+                for (int i = pool.instances.Count - 1; i >= 0; i--)
+                {
+                    var instance = pool.instances[i];
+                    if (instance && instance.scene == loadedScene)
+                    {
+                        retainedIds.Add(GetObjectId(instance));
+                        continue;
+                    }
+                    if (instance) UnityEngine.Object.Destroy(instance);
+                    pool.instances.RemoveAt(i);
+                    discarded++;
+                }
+                pool.currentIndex = 0;
+            }
+            var staleIds = new List<PoolObjectId>();
+            foreach (var id in instanceToPoolName.Keys)
+                if (!retainedIds.Contains(id)) staleIds.Add(id);
+            foreach (var id in staleIds) instanceToPoolName.Remove(id);
 
-			// Stop any queued expansion work that references old pools/settings.
-			int queuedJobs = s_expansionQueue.Count;
-			s_expansionQueue.Clear();
-			IsWarming = false;
-
-			foreach (var kv in objectsMap)
-			{
-				var pool = kv.Value;
-				if (pool?.instances == null) continue;
-
-				totalInstancesTracked += pool.instances.Count;
-
-				for (int i = pool.instances.Count - 1; i >= 0; i--)
-				{
-					var go = pool.instances[i];
-
-					if (!go)
-					{
-						missingCount++;
-						continue;
-					}
-
-					UnityEngine.Object.Destroy(go);
-					destroyedCount++;
-				}
-
-				pool.instances.Clear();
-				pool.currentIndex = 0;
-			}
-
-			objectsMap.Clear();
-			poolsByPrefabId.Clear();
-			instanceToPoolName.Clear();
-			cachedObjectNames.Clear();
-
-			// Log once. We need an instance to read the serialized toggle.
-			// If no instance exists (edge cases), default to logging anyway.
-			bool shouldLog = _instance == null || _instance.logPoolFlushOnSceneLoad;
-			if (shouldLog && (poolsCount > 0 || totalInstancesTracked > 0 || queuedJobs > 0))
-			{
-				Debug.Log(
-					$"[PoolManager] Pool flush on full scene load: '{loadedScene.name}' " +
-					$"(pools={poolsCount}, trackedInstances={totalInstancesTracked}, destroyed={destroyedCount}, " +
-					$"missingRefs={missingCount}, clearedJobs={queuedJobs})"
-				);
-			}
-		}
+            int jobs = s_expansionQueue.Count;
+            for (int i = 0; i < jobs; i++)
+            {
+                var job = s_expansionQueue.Dequeue();
+                if (job.pool?.instances != null && job.pool.instances.Count > 0)
+                    s_expansionQueue.Enqueue(job);
+            }
+            IsWarming = s_expansionQueue.Count > 0;
+            // Keep prefab registrations: EnsurePoolCapacity measures actual surviving instances.
+            if (discarded > 0 && (_instance == null || _instance.logPoolFlushOnSceneLoad))
+                Debug.Log($"[PoolManager] Previous-scene cleanup: '{loadedScene.name}' (discarded={discarded}).");
+        }
 
         // Queue of expansion jobs that will be processed over multiple frames.
         private static readonly Queue<ExpansionJob> s_expansionQueue = new();
@@ -225,6 +206,82 @@ namespace MegaCrush.ObjectPool
             if (s_expansionQueue.Count == 0)
                 IsWarming = false;
         }
+
+        /// <summary>Number of surviving instances for this prefab, including borrowed instances.</summary>
+        public static int GetPoolCapacity(GameObject prefab)
+        {
+            if (!prefab || !poolsByPrefabId.TryGetValue(GetObjectId(prefab), out var pool) || pool?.instances == null) return 0;
+            int count = 0;
+            foreach (var instance in pool.instances) if (instance) count++;
+            return count;
+        }
+
+        /// <summary>Warm a complete plan without spawning. Budget is shared across all prefabs in this call.
+        /// Time budget is checked between instances: a single expensive Instantiate cannot be interrupted.
+        /// Caller owns iteration/cancellation; existing capacity survives cancellation and can be reused.</summary>
+        public static System.Collections.IEnumerator PrewarmPoolsAsync(
+            IEnumerable<KeyValuePair<GameObject, int>> requests, int instancesPerFrame = 8,
+            float millisecondsPerFrame = 2f, Action<float> onProgress = null)
+        {
+            if (requests == null) throw new ArgumentNullException(nameof(requests));
+            var plan = new Dictionary<GameObject, int>();
+            foreach (var request in requests)
+            {
+                if (!request.Key || request.Value <= 0) continue;
+                plan.TryGetValue(request.Key, out int previous);
+                plan[request.Key] = Mathf.Max(previous, request.Value);
+            }
+            long total = 0;
+            foreach (var request in plan) total += Math.Max(0, request.Value - GetPoolCapacity(request.Key));
+            onProgress?.Invoke(total == 0 ? 1f : 0f);
+            if (total == 0) yield break;
+            EnsureInstance();
+            // Give an authored loading screen a frame before the first construction work.
+            yield return null;
+            int budget = Mathf.Max(1, instancesPerFrame);
+            int madeThisFrame = 0;
+            long completed = 0;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var request in plan)
+            {
+                if (!request.Key) throw new InvalidOperationException("A prewarm prefab was destroyed during preparation.");
+                int capacity = GetPoolCapacity(request.Key);
+                while (capacity < request.Value)
+                {
+                    if (madeThisFrame >= budget || (madeThisFrame > 0 && millisecondsPerFrame > 0f && clock.Elapsed.TotalMilliseconds >= millisecondsPerFrame))
+                    {
+                        yield return null;
+                        madeThisFrame = 0;
+                        clock.Restart();
+                    }
+                    EnsurePoolCapacity(request.Key, capacity + 1);
+                    int actual = GetPoolCapacity(request.Key);
+                    if (actual <= capacity) throw new InvalidOperationException($"Pool warmup made no progress for '{request.Key.name}'.");
+                    completed += actual - capacity;
+                    capacity = actual;
+                    madeThisFrame++;
+                    onProgress?.Invoke(Mathf.Min(1f, (float)completed / total));
+                }
+            }
+            onProgress?.Invoke(1f);
+        }
+
+        /// <summary>Ensure a total capacity without repeatedly adding the requested count.</summary>
+        public static void EnsurePoolCapacity(GameObject prefab, int capacity)
+        {
+            if (!prefab || capacity <= 0) return;
+            EnsureInstance();
+            int existing = 0;
+            if (poolsByPrefabId.TryGetValue(GetObjectId(prefab), out var pool) && pool != null)
+                foreach (var instance in pool.instances)
+                    if (instance) existing++;
+            if (existing < capacity)
+                AddNewObjectPool(new PoolObjectSetting { prefab = prefab, count = capacity - existing });
+        }
+
+        /// <summary>True for a currently borrowed instance, independent of its name.</summary>
+        public static bool IsBorrowedInstance(GameObject instance) =>
+            instance && instanceToPoolName.ContainsKey(GetObjectId(instance));
 
         /// <summary>
         /// Register a new pool and pre-instantiate its objects.
@@ -321,9 +378,10 @@ namespace MegaCrush.ObjectPool
             }
             else
             {
+                bool wasWarming = IsWarming;
                 IsWarming = true;
-                InternalCreateInstances(pool, poolObject, toCreate);
-                IsWarming = false;
+                try { InternalCreateInstances(pool, poolObject, toCreate); }
+                finally { IsWarming = wasWarming; }
             }
         }
 
@@ -468,11 +526,6 @@ namespace MegaCrush.ObjectPool
                     }
                 }
 
-                string poolName = !string.IsNullOrEmpty(pool.poolName) ? pool.poolName : GetPoolName(pool.settings);
-                instanceToPoolName[GetObjectId(instance)] = poolName;
-
-                // Cosmetic
-                instance.name = $"{poolName}_{Guid.NewGuid()}";
                 return instance;
             }
 
@@ -499,10 +552,11 @@ namespace MegaCrush.ObjectPool
             if (pool == null)
                 return null;
 
-            if (activate)
-                return hasTransform ? pool.GetInstance(position, rotation, parent) : pool.GetInstance();
-
-            return hasTransform ? pool.GetInactiveInstance(position, rotation, parent) : pool.GetInactiveInstance();
+            var instance = hasTransform ? pool.GetInactiveInstance(position, rotation, parent) : pool.GetInactiveInstance();
+            if (!instance) return null;
+            instanceToPoolName[GetObjectId(instance)] = pool.poolName;
+            if (activate) PoolObjects.ActivateInstance(instance);
+            return instance;
         }
 
         /// <summary>
@@ -522,7 +576,7 @@ namespace MegaCrush.ObjectPool
             if (!objectsMap.TryGetValue(poolName, out var pool) || pool == null)
                 return null;
 
-            var instance = pool.GetInstance(); // may return null if all active
+            var instance = BorrowFromPool(pool, true, false, Vector3.zero, Quaternion.identity, null);
             if (!instance)
             {
                 var settings = pool.settings;
@@ -548,7 +602,7 @@ namespace MegaCrush.ObjectPool
                     return null;
                 }
 
-                instance = pool.GetInstance();
+                instance = BorrowFromPool(pool, true, false, Vector3.zero, Quaternion.identity, null);
                 if (!instance)
                 {
                     Debug.LogError($"PoolManager: Failed to fetch instance for '{poolName}' after expansion.");
@@ -556,11 +610,6 @@ namespace MegaCrush.ObjectPool
                 }
             }
 
-            // Track mapping so ReturnInstance can find the right pool without parsing names
-            instanceToPoolName[GetObjectId(instance)] = poolName;
-
-            // Keep a readable name (purely cosmetic)
-            instance.name = $"{poolName}_{Guid.NewGuid()}";
             return instance;
         }
 

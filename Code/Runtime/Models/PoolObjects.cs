@@ -154,7 +154,7 @@ namespace MegaCrush.ObjectPool
             go.transform.SetPositionAndRotation(position, rotation);
         }
 
-        private static void ActivateInstance(GameObject go)
+        public static void ActivateInstance(GameObject go)
         {
             if (!go)
                 return;
